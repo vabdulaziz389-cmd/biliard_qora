@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bilyard POS — demo</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--felt:#1f4d3a;--felt2:#163a2b;--ivory:#f3efe4;--ink:#241912;--red:#b8322a;--brass:#c9a24b;--mute:#8a8473;--card:#fbf8f0;--line:#ddd6c3}
+@media (prefers-color-scheme:dark){:root{--ivory:#14110d;--ink:#f1ece0;--card:#1e1a14;--line:#3a3328;--mute:#9a927e}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;font-family:'Bricolage Grotesque',system-ui,sans-serif;background:var(--ivory);color:var(--ink);touch-action:manipulation}
+header{background:var(--felt);color:#f3efe4;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;border-bottom:4px solid var(--brass)}
+h1{margin:0;font-size:22px;font-weight:800}
+.stats{display:flex;gap:20px;font-size:13px}.stats b{display:block;font-size:18px}
+main{display:grid;grid-template-columns:1fr 340px;gap:20px;padding:20px;max-width:1200px;margin:auto}
+.tables{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;align-content:start}
+.t{background:var(--felt);color:#f3efe4;border:3px solid var(--felt2);border-radius:14px;padding:12px;cursor:pointer;text-align:left;font:inherit;min-height:112px;box-shadow:inset 0 0 0 3px rgba(255,255,255,.06)}
+.t.busy{background:var(--red);border-color:#8d2620}
+.t.sel{outline:3px solid var(--brass);outline-offset:2px}
+.t small{opacity:.8;display:block}.t .n{font-size:20px;font-weight:800}
+.t .tm{font-size:24px;font-weight:600;margin-top:8px;font-variant-numeric:tabular-nums}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;position:sticky;top:12px;align-self:start}
+.panel h2{margin:0 0 4px;font-size:18px}
+.head{display:flex;justify-content:space-between;align-items:center}
+.x{display:none}
+.row{display:flex;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px dashed var(--line);font-size:14px}
+.btn{font:inherit;font-weight:600;border:0;border-radius:10px;padding:11px 15px;cursor:pointer;background:var(--felt);color:#f3efe4;min-height:44px}
+.btn.red{background:var(--red)}.btn.brass{background:var(--brass);color:#241912}.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn:focus-visible,.t:focus-visible{outline:3px solid var(--brass);outline-offset:2px}
+.menu{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.menu .btn{padding:8px 12px;font-size:14px;min-height:40px}
+.total{font-size:26px;font-weight:800;margin:10px 0}
+.hist{max-width:1200px;margin:0 auto 30px;padding:0 20px}
+.hist h2{font-size:18px}
+.empty{color:var(--mute);font-size:14px}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);max-width:360px;width:92%}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+
+@media(max-width:860px){
+  main{grid-template-columns:1fr;padding:12px;gap:12px}
+  .tables{grid-template-columns:repeat(2,1fr);gap:10px}
+  .hist{padding:0 12px}
+  .panel{display:none;position:fixed;left:0;right:0;bottom:0;top:auto;z-index:20;border-radius:18px 18px 0 0;max-height:80vh;overflow:auto;box-shadow:0 -8px 30px rgba(0,0,0,.35);padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+  .panel.open{display:block}
+  .x{display:inline-block;padding:6px 12px;min-height:36px}
+  .btn{min-height:48px}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎱 Bilyard POS</h1>
+  <div class="stats"><div>Bugungi tushum<b id="rev">0</b></div><div>Band stollar<b id="busyN">0</b></div></div>
+</header>
+<main>
+  <section><div class="tables" id="tables"></div></section>
+  <aside class="panel" id="panel"></aside>
+</main>
+<section class="hist">
+  <h2>Bugungi to‘lovlar</h2>
+  <div id="hist"></div>
+  <p><button class="btn ghost" id="reset">Barcha ma’lumotni tozalash</button></p>
+</section>
+
+<dialog id="dlg">
+  <h2 style="margin-top:0">Chek</h2>
+  <div id="receipt"></div>
+  <p style="text-align:right"><button class="btn" id="closeDlg">Yopish</button></p>
+</dialog>
+
+<script>
+const RATE = {std:30000, vip:50000};
+const TABLES = [1,2,3,4,5,6].map(i=>({id:i,name:'Stol '+i,type:'std'})).concat([{id:7,name:'VIP 1',type:'vip'},{id:8,name:'VIP 2',type:'vip'}]);
+const MENU = [['Choy',5000],['Kofe',15000],['Kola',10000],['Suv',4000],['Pitsa',60000],['Snek',12000]];
+const KEY = 'bilyard_pos_demo_v1';
+let S = {tables:{}, sales:[]}, sel = null;
+
+try { const r = localStorage.getItem(KEY); if (r) S = JSON.parse(r); } catch(e) {}
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch(e) {} };
+const st = id => S.tables[id] || (S.tables[id] = {start:null, items:[]});
+const fmt = n => Math.round(n).toLocaleString('ru-RU').replace(/\u00a0/g,' ') + ' so‘m';
+const clock = ms => { const s = Math.floor(ms/1000); return [Math.floor(s/3600), Math.floor(s%3600/60), s%60].map(x=>String(x).padStart(2,'0')).join(':'); };
+const tableOf = id => TABLES.find(t=>t.id===id);
+const timeCost = t => { const s = st(t.id); return s.start ? (Date.now()-s.start)/3600000*RATE[t.type] : 0; };
+const itemsCost = id => st(id).items.reduce((a,i)=>a+i.price*i.qty,0);
+const today = () => new Date().toLocaleDateString('uz-UZ');
+
+function renderTables(){
+  document.getElementById('tables').innerHTML = TABLES.map(t=>{
+    const s = st(t.id), busy = !!s.start;
+    return `<button class="t ${busy?'busy':''} ${sel===t.id?'sel':''}" data-id="${t.id}">
+      <span class="n">${t.name}</span><small>${fmt(RATE[t.type])} / soat</small>
+      <div class="tm" data-tm="${t.id}">${busy?clock(Date.now()-s.start):'Bo‘sh'}</div></button>`;
+  }).join('');
+  document.querySelectorAll('.t').forEach(b=>b.onclick=()=>{sel=+b.dataset.id;renderAll();});
+  const busyN = TABLES.filter(t=>st(t.id).start).length;
+  document.getElementById('busyN').textContent = busyN + ' / ' + TABLES.length;
+}
+
+function renderPanel(){
+  const p = document.getElementById('panel');
+  p.classList.toggle('open', !!sel);
+  if (!sel){ p.innerHTML = '<h2>Stol tanlang</h2><p class="empty">Stollardan birini bosing: vaqtni boshlang, buyurtma qo‘shing va hisob-kitob qiling.</p>'; return; }
+  const t = tableOf(sel), s = st(sel), busy = !!s.start;
+  p.innerHTML = `<div class="head"><h2>${t.name}</h2><button class="btn ghost x" id="close">Yopish</button></div>
+    <div class="empty">${busy?'O‘yin davom etmoqda':'Stol bo‘sh'}</div>
+    <div style="margin:10px 0">${busy
+      ? '<button class="btn red" id="stop">To‘lovni hisoblash</button>'
+      : '<button class="btn" id="start">O‘yinni boshlash</button>'}</div>
+    ${busy?`<div class="menu">${MENU.map((m,i)=>`<button class="btn brass" data-m="${i}">+ ${m[0]}</button>`).join('')}</div>`:''}
+    <div id="lines"></div>
+    <div class="total" id="tot"></div>`;
+  document.getElementById('close').onclick = () => { sel = null; renderAll(); };
+  if (busy){
+    p.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>{
+      const m = MENU[+b.dataset.m], it = s.items.find(x=>x.name===m[0]);
+      it ? it.qty++ : s.items.push({name:m[0],price:m[1],qty:1});
+      save(); renderLines();
+    });
+    document.getElementById('stop').onclick = checkout;
+  } else document.getElementById('start').onclick = () => { s.start = Date.now(); s.items = []; save(); renderAll(); };
+  renderLines();
+}
+
+function renderLines(){
+  if (!sel) return;
+  const t = tableOf(sel), s = st(sel), L = document.getElementById('lines'), T = document.getElementById('tot');
+  if (!L) return;
+  if (!s.start){ L.innerHTML = ''; T.textContent = ''; return; }
+  L.innerHTML = `<div class="row"><span>Vaqt (${clock(Date.now()-s.start)})</span><b>${fmt(timeCost(t))}</b></div>` +
+    s.items.map(i=>`<div class="row"><span>${i.name} × ${i.qty}</span><b>${fmt(i.price*i.qty)}</b></div>`).join('');
+  T.textContent = 'Jami: ' + fmt(timeCost(t) + itemsCost(sel));
+}
+
+function checkout(){
+  const t = tableOf(sel), s = st(sel);
+  const tc = Math.round(timeCost(t)/500)*500, ic = itemsCost(sel), dur = Date.now()-s.start;
+  const sale = {table:t.name, dur, tc, ic, total:tc+ic, at:new Date().toLocaleTimeString('uz-UZ',{hour:'2-digit',minute:'2-digit'}), day:today(), items:s.items};
+  S.sales.push(sale); S.tables[sel] = {start:null, items:[]}; save();
+  document.getElementById('receipt').innerHTML =
+    `<div class="row"><span>${t.name}</span><span>${sale.at}</span></div>
+     <div class="row"><span>O‘yin vaqti ${clock(dur)}</span><b>${fmt(tc)}</b></div>` +
+    sale.items.map(i=>`<div class="row"><span>${i.name} × ${i.qty}</span><b>${fmt(i.price*i.qty)}</b></div>`).join('') +
+    `<div class="total">${fmt(sale.total)}</div>`;
+  sel = null;
+  document.getElementById('dlg').showModal();
+  renderAll();
+}
+
+function renderHist(){
+  const d = S.sales.filter(x=>x.day===today());
+  document.getElementById('rev').textContent = fmt(d.reduce((a,x)=>a+x.total,0));
+  document.getElementById('hist').innerHTML = d.length
+    ? d.slice().reverse().map(x=>`<div class="row"><span>${x.at} — ${x.table} (${clock(x.dur)})</span><b>${fmt(x.total)}</b></div>`).join('')
+    : '<p class="empty">Hozircha to‘lov yo‘q. Birinchi o‘yinni boshlang.</p>';
+}
+
+function renderAll(){ renderTables(); renderPanel(); renderHist(); }
+
+document.getElementById('closeDlg').onclick = () => document.getElementById('dlg').close();
+document.getElementById('reset').onclick = () => { if (confirm('Barcha stollar va to‘lovlar o‘chiriladi. Davom etasizmi?')){ S = {tables:{}, sales:[]}; sel = null; save(); renderAll(); } };
+
+setInterval(()=>{
+  TABLES.forEach(t=>{ const s = st(t.id), el = document.querySelector(`[data-tm="${t.id}"]`); if (el && s.start) el.textContent = clock(Date.now()-s.start); });
+  renderLines();
+}, 1000);
+renderAll();
+</script>
+</body>
+</html>
